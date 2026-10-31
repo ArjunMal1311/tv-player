@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Send a link (or a remote key) to an Android TV running TV Player, over ADB.
+#   tv <url>        open the link on the TV
+#   tv              open the link currently in the clipboard
+#   tv pause|play   play/pause      tv back|home|ok|up|down|left|right
+#   tv vol+|vol-|mute               tv off  (sleep)   tv on  (wake)
+set -euo pipefail
+
+# The TV's address: $TV_IP, else the first line of ~/.config/tv-player/tv_ip
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/tv-player/tv_ip"
+TV_IP="${TV_IP:-$(head -n1 "$CONF" 2>/dev/null || true)}"
+if [ -z "$TV_IP" ]; then
+  echo "Set the TV's IP: export TV_IP=192.168.x.x, or write it to $CONF" >&2
+  exit 1
+fi
+TV="$TV_IP:5555"
+PLAYER="dev.atg.tvplayer/.PlayerActivity"
+WEBPLAYER="dev.atg.tvplayer/.WebPlayerActivity"
+
+adb connect "$TV" >/dev/null 2>&1 || true
+if ! adb -s "$TV" get-state >/dev/null 2>&1; then
+  echo "TV not reachable at $TV (is it on, same Wi-Fi, network debugging on?)" >&2
+  exit 1
+fi
+
+key() { adb -s "$TV" shell input keyevent "$1"; }
+
+case "${1:-}" in
+  pause|play) key KEYCODE_MEDIA_PLAY_PAUSE ;;
+  back)  key KEYCODE_BACK ;;
+  home)  key KEYCODE_HOME ;;
+  ok)    key KEYCODE_DPAD_CENTER ;;
+  up)    key KEYCODE_DPAD_UP ;;
+  down)  key KEYCODE_DPAD_DOWN ;;
+  left)  key KEYCODE_DPAD_LEFT ;;
+  right) key KEYCODE_DPAD_RIGHT ;;
+  vol+)  key KEYCODE_VOLUME_UP ;;
+  vol-)  key KEYCODE_VOLUME_DOWN ;;
+  mute)  key KEYCODE_VOLUME_MUTE ;;
+  off)   key KEYCODE_SLEEP ;;
+  on)    key KEYCODE_WAKEUP ;;
+  *)
+    url="${1:-}"
+    if [ -z "$url" ]; then
+      url="$(wl-paste -n 2>/dev/null || xclip -o -selection clipboard 2>/dev/null || true)"
+    fi
+    case "$url" in
+      http://*|https://*) ;;
+      *) echo "usage: tv <url> | tv (url in clipboard) | tv pause|back|home|ok|up|down|left|right|vol+|vol-|mute|off|on" >&2; exit 1 ;;
+    esac
+    key KEYCODE_WAKEUP
+    host="${url#*://}"; host="${host%%/*}"; path="${url%%[?#]*}"
+    case "${path,,}" in
+      *.mp4|*.mkv|*.webm|*.m3u8|*.mpd|*.mov) app="$PLAYER" ;;
+      *) app="$WEBPLAYER" ;;   # page: the app finds the video and shows only that
+    esac
+    adb -s "$TV" shell am start -n "$app" -a android.intent.action.VIEW -d "'$url'" >/dev/null
+    echo "playing on TV: $url"
+    ;;
+esac
